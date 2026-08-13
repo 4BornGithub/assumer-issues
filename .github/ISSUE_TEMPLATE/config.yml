@@ -1,0 +1,7 @@
+# Blank issues stay enabled because the crash screen builds a report body directly and links to the plain
+# form; forcing the template chooser would discard the stack trace it has already collected.
+blank_issues_enabled: true
+contact_links:
+  - name: Assumer
+    url: https://assumer-web.pages.dev
+    about: Product information and downloads.

@@ -1,0 +1,23 @@
+name: Feature request
+description: Something Assumer should be able to do and cannot
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What were you trying to do, and what stopped you? Describe this before the solution.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+      description: Optional. If you already have a shape in mind, describe it.
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: What you do today instead
+      description: Optional, and more useful than it sounds — it shows how much the gap costs you.
