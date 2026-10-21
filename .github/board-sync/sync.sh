@@ -55,38 +55,48 @@ PROJECT_TITLE=$(jq -r '.data.user.projectV2.title' <<<"$META")
 jq '.data.user.projectV2 | {title, url, fields: [.fields.nodes[] | select(.name)]}' <<<"$META" > "$OUT/fields.json"
 STATUS_FIELD=$(jq -r '.fields[] | select(.name=="Status") | .id' "$OUT/fields.json")
 
+# Reads every card. A page is retried when GitHub answers with an error, and the snapshot is only replaced when the
+# number of cards read equals the board's own totalCount, so a partial read never looks like a complete board.
 export_items() {
-  local after=null page
+  local after=null page total="" attempt
   : > "$WORK/items.ndjson"
   while :; do
-    page=$(gh api graphql -f login="$OWNER" -F number="$NUMBER" -F after="$after" -f query='
-      query($login:String!, $number:Int!, $after:String) {
-        user(login:$login) { projectV2(number:$number) { items(first:100, after:$after) {
-          pageInfo { hasNextPage endCursor }
-          nodes {
-            id updatedAt
-            status: fieldValueByName(name:"Status") { ... on ProjectV2ItemFieldSingleSelectValue { name } }
-            content {
-              __typename
-              ... on Issue { number title state url repository { nameWithOwner } assignees(first:5) { nodes { login } } labels(first:20) { nodes { name } } }
-              ... on PullRequest { number title state url repository { nameWithOwner } }
-              ... on DraftIssue { title }
+    for attempt in 1 2 3 4; do
+      page=$(gh api graphql -f login="$OWNER" -F number="$NUMBER" -F after="$after" -f query='
+        query($login:String!, $number:Int!, $after:String) {
+          user(login:$login) { projectV2(number:$number) { items(first:100, after:$after) {
+            totalCount
+            pageInfo { hasNextPage endCursor }
+            nodes {
+              id updatedAt
+              status: fieldValueByName(name:"Status") { ... on ProjectV2ItemFieldSingleSelectValue { name } }
+              content {
+                __typename
+                ... on Issue { number title state url repository { nameWithOwner } assignees(first:5) { nodes { login } } labels(first:20) { nodes { name } } }
+                ... on PullRequest { number title state url repository { nameWithOwner } }
+                ... on DraftIssue { title }
+              }
             }
-          }
-        } } }
-      }') || return 1
+          } } }
+        }') && jq -e '(.errors | not) and (.data.user.projectV2.items.nodes | type == "array")' <<<"$page" > /dev/null && break
+      page=""
+      sleep $((attempt * 5))
+    done
+    [ -n "$page" ] || return 1
+    total=$(jq -r '.data.user.projectV2.items.totalCount' <<<"$page")
     jq -c '.data.user.projectV2.items.nodes[] | {
         item_id: .id, status: (.status.name // "No status"), type: .content.__typename, number: .content.number,
         repo: .content.repository.nameWithOwner, title: .content.title, state: .content.state, url: .content.url,
         assignees: [.content.assignees.nodes[]?.login], labels: [.content.labels.nodes[]?.name], updated_at: .updatedAt }' \
-      <<<"$page" >> "$WORK/items.ndjson"
+      <<<"$page" >> "$WORK/items.ndjson" || return 1
     [ "$(jq -r '.data.user.projectV2.items.pageInfo.hasNextPage' <<<"$page")" = true ] || break
     after=$(jq -r '.data.user.projectV2.items.pageInfo.endCursor' <<<"$page")
   done
+  [ "$(wc -l < "$WORK/items.ndjson")" -eq "$total" ] || return 1
   jq -s 'sort_by(.status, -(.number // 0))' "$WORK/items.ndjson" > "$OUT/board.json"
 }
 
-export_items || finish false "cannot read project items"
+export_items || finish false "could not read the whole board (GitHub errors or a short read); the previous snapshot is kept"
 
 # Apply new move requests.
 if git clone -q --depth 1 --branch board-requests "$REMOTE" "$WORK/req" 2>/dev/null; then
