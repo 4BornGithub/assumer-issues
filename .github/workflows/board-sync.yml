@@ -1,0 +1,30 @@
+name: Board sync
+
+# Copies project board users/4BornGithub/projects/26 into the PRIVATE repo 4BornGithub/assumer-releases
+# (branch board-sync) and applies card moves requested there (branch board-requests).
+# This repo is public: the logs print only "ok" or "failed", never task names, numbers or statuses.
+# It runs only on its timer or by hand; no issue, comment or pull request can start it, so outsiders
+# can never run it with the secret.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: board-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sync board
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+        run: |
+          if bash .github/board-sync/sync.sh > /dev/null 2>&1; then echo ok; else echo failed; exit 1; fi
