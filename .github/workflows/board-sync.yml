@@ -3,11 +3,14 @@ name: Board sync
 # Copies project board users/4BornGithub/projects/26 into the PRIVATE repo 4BornGithub/assumer-releases
 # (branch board-sync) and applies card moves requested there (branch board-requests).
 # This repo is public: the logs print only "ok" or "failed", never task names, numbers or statuses.
-# It runs only on its timer or by hand; no issue, comment or pull request can start it, so outsiders
-# can never run it with the secret.
+# It starts on demand: Claude sends a repository_dispatch (event type board-sync) whenever it needs the board
+# read or a card moved, and an hourly run catches anything missed. Only accounts with write access can send a
+# dispatch; no issue, comment or pull request can start it, so outsiders can never run it with the secret.
 on:
+  repository_dispatch:
+    types: [board-sync]
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "17 * * * *"
   workflow_dispatch: {}
 
 permissions:

@@ -13,6 +13,8 @@ PRIVATE=4BornGithub/assumer-releases
 WORK=$(mktemp -d)
 REMOTE="https://x-access-token:${GH_TOKEN}@github.com/${PRIVATE}.git"
 NOW=$(date -u +%FT%TZ)
+# The id Claude sends with a dispatch, echoed in status.json so it can tell its own run has finished.
+REQUEST_ID=$(jq -r '.client_payload.request_id // empty' "${GITHUB_EVENT_PATH:-/dev/null}" 2>/dev/null)
 
 git config --global user.name "board-sync"
 git config --global user.email "board-sync@users.noreply.github.com"
@@ -26,7 +28,8 @@ mkdir -p "$OUT/results"
 
 finish() {
   jq -n --argjson ok "$1" --arg message "$2" --arg at "$NOW" --arg project "${PROJECT_TITLE:-}" \
-    '{ok:$ok, message:$message, project:$project, checked_at:$at}' > "$OUT/status.json"
+    --arg request_id "${REQUEST_ID:-}" --arg trigger "${GITHUB_EVENT_NAME:-local}" \
+    '{ok:$ok, message:$message, project:$project, checked_at:$at, request_id:$request_id, trigger:$trigger}' > "$OUT/status.json"
   git -C "$OUT" add -A
   git -C "$OUT" commit -qm "board snapshot $NOW" || exit 0
   for attempt in 1 2 3; do
