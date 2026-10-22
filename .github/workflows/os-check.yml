@@ -87,8 +87,8 @@ jobs:
           OS_LABEL: ${{ matrix.os }}
         run: |
           if bash .github/os-check/run.sh > /dev/null 2>&1; then echo ok; else echo failed; exit 1; fi
-      - name: Publish a timed-out check
-        if: ${{ always() && steps.check.outcome != 'success' && steps.check.outcome != 'failure' }}
+      - name: Publish a timed-out check (does nothing when the check published its result)
+        if: ${{ always() && steps.check.outcome != 'skipped' }}
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
