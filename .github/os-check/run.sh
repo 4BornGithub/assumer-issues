@@ -71,6 +71,8 @@ fi
 # `bun-install` in needs: install Assumer's dependencies here, because one of them (ghostty-web) is a private
 # GitHub package that bun downloads with GITHUB_TOKEN. Output goes to install.txt; the check then skips its install.
 if grep -qx 'bun-install' "$WORK/checks/checks/$CHECK/needs" 2>/dev/null; then
+  # Native install scripts (tree-sitter-*) call node-gyp, which the Windows image does not put on PATH.
+  command -v node-gyp > /dev/null 2>&1 || npm i -g node-gyp > "$RES/node-gyp.txt" 2>&1
   ( cd "$WORK/assumer" && GITHUB_TOKEN="$GH_TOKEN" bun install --frozen-lockfile ) > "$RES/install.txt" 2>&1 \
     || publish false 1 "bun install failed (see install.txt)"
   touch "$WORK/.installed"
