@@ -46,6 +46,13 @@ publish() {
   exit 1
 }
 
+# Second call, after the step that ran the check hit its time limit: publish what it left, marked as timed out.
+if [ "${OS_CHECK_PUBLISH_ONLY:-}" = 1 ]; then
+  [ -f "$RES/status.json" ] && exit 0
+  SHA=$(git -C "$WORK/assumer" rev-parse HEAD 2>/dev/null)
+  publish false 124 "timed out: the check ran past the step's time limit (partial log kept)"
+fi
+
 [[ "${CHECK:-}" =~ ^[a-z0-9-]+$ && "${REQUEST_ID:-}" =~ ^[A-Za-z0-9._-]+$ && -n "${OS_LABEL:-}" ]] || exit 1
 [ -n "${GH_TOKEN:-}" ] || publish false 1 "PROJECT_TOKEN secret is empty or missing"
 
