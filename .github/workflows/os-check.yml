@@ -1,0 +1,87 @@
+name: OS check
+
+# Runs a named check on GitHub-hosted Windows/macOS runners. This repo is public, so it holds only this workflow
+# and a generic runner: the check scripts (branch os-checks) and the results (branch os-results) live in the
+# PRIVATE repo 4BornGithub/assumer-releases, and the code under test is checked out at run time into runner
+# temp space. The logs print only "ok" or "failed". Only accounts with write access can send a dispatch or start
+# a workflow_dispatch; no issue, comment or pull request can start it.
+#   repository_dispatch  event_type os-check, client_payload {request_id, check, ref, os: ["windows-latest", ...]}
+on:
+  repository_dispatch:
+    types: [os-check]
+  workflow_dispatch:
+    inputs:
+      check: { description: "check name", required: true }
+      ref: { description: "git ref of the code under test", required: false, default: "" }
+      os: { description: "space-separated runner labels", required: false, default: "windows-latest macos-latest" }
+      request_id: { description: "id for the results folder", required: false, default: "" }
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      os: ${{ steps.plan.outputs.os }}
+      check: ${{ steps.plan.outputs.check }}
+      ref: ${{ steps.plan.outputs.ref }}
+      request_id: ${{ steps.plan.outputs.request_id }}
+    steps:
+      - name: Validate request
+        id: plan
+        env:
+          IN_CHECK: ${{ github.event.client_payload.check || inputs.check }}
+          IN_REF: ${{ github.event.client_payload.ref || inputs.ref }}
+          IN_OS: ${{ github.event.client_payload.os && join(github.event.client_payload.os, ' ') || inputs.os }}
+          IN_ID: ${{ github.event.client_payload.request_id || inputs.request_id }}
+        run: |
+          set -u
+          fail() { echo failed; exit 1; }
+          [[ "$IN_CHECK" =~ ^[a-z0-9-]+$ ]] || fail
+          ref=${IN_REF:-claude/assumer-automations-2026-10-21}
+          [[ "$ref" =~ ^[A-Za-z0-9._/-]+$ && "$ref" != *..* ]] || fail
+          id=${IN_ID:-$(date -u +%Y%m%d%H%M%S)-$GITHUB_RUN_ID}
+          [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || fail
+          os=()
+          for o in ${IN_OS:-windows-latest macos-latest}; do
+            [[ "$o" =~ ^(windows|macos|ubuntu)-[a-z0-9.-]+$ ]] || fail
+            os+=("$o")
+          done
+          [ ${#os[@]} -gt 0 ] || fail
+          {
+            echo "os=$(printf '%s\n' "${os[@]}" | jq -Rsc 'split("\n") | map(select(length > 0)) | unique')"
+            echo "check=$IN_CHECK"; echo "ref=$ref"; echo "request_id=$id"
+          } >> "$GITHUB_OUTPUT"
+          echo ok
+
+  run:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(needs.plan.outputs.os) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/os-check
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Run check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+          CHECK: ${{ needs.plan.outputs.check }}
+          REF: ${{ needs.plan.outputs.ref }}
+          REQUEST_ID: ${{ needs.plan.outputs.request_id }}
+          OS_LABEL: ${{ matrix.os }}
+        run: |
+          if bash .github/os-check/run.sh > /dev/null 2>&1; then echo ok; else echo failed; exit 1; fi
