@@ -85,7 +85,7 @@ export_items() {
     [ -n "$page" ] || { echo "a page failed 4 times" > "$WORK/why"; return 1; }
     # A card whose content the token cannot read comes back with a partial error; the count check below still
     # guarantees nothing was skipped. The error's type is kept for the status line (no private text).
-    jq -r '.errors[]? | .type // "error"' <<<"$page" >> "$WORK/partial-errors"
+    jq -r '.errors[]? | "\(.type // "error") at \((.path // []) | map(tostring) | join("."))"' <<<"$page" >> "$WORK/partial-errors"
     total=$(jq -r '.data.user.projectV2.items.totalCount' <<<"$page")
     jq -c '.data.user.projectV2.items.nodes[] | {
         item_id: .id, status: (.status.name // "No status"), type: .content.__typename, number: .content.number,
@@ -95,7 +95,7 @@ export_items() {
     [ "$(jq -r '.data.user.projectV2.items.pageInfo.hasNextPage' <<<"$page")" = true ] || break
     after=$(jq -r '.data.user.projectV2.items.pageInfo.endCursor' <<<"$page")
   done
-  [ "$(wc -l < "$WORK/items.ndjson")" -eq "$total" ] || { echo "read $(wc -l < "$WORK/items.ndjson") of $total" > "$WORK/why"; return 1; }
+  [ "$(wc -l < "$WORK/items.ndjson")" -eq "$total" ] || { echo "read $(wc -l < "$WORK/items.ndjson") of $total; errors: $(sort "$WORK/partial-errors" 2>/dev/null | uniq -c | tr -s ' ' | tr '\n' ',' | cut -c1-300)" > "$WORK/why"; return 1; }
   jq -s 'sort_by(.status, -(.number // 0))' "$WORK/items.ndjson" > "$OUT/board.json"
 }
 
