@@ -95,6 +95,8 @@ export_items() {
     [ "$(jq -r '.data.user.projectV2.items.pageInfo.hasNextPage' <<<"$page")" = true ] || break
     after=$(jq -r '.data.user.projectV2.items.pageInfo.endCursor' <<<"$page")
   done
+  # An empty answer (totalCount missing or 0) is a GitHub glitch, never a real board: it must not replace the snapshot.
+  case "$total" in ''|null|0) echo "GitHub answered with an empty board" > "$WORK/why"; return 1 ;; esac
   [ "$(wc -l < "$WORK/items.ndjson")" -eq "$total" ] || { echo "read $(wc -l < "$WORK/items.ndjson") of $total; errors: $(sort "$WORK/partial-errors" 2>/dev/null | uniq -c | tr -s ' ' | tr '\n' ',' | cut -c1-300)" > "$WORK/why"; return 1; }
   jq -s 'sort_by(.status, -(.number // 0))' "$WORK/items.ndjson" > "$OUT/board.json"
 }
