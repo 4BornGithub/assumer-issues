@@ -54,15 +54,16 @@ publish() {
 } >>"$SETUP_LOG" 2>&1 || publish false 1 "cannot read branch os-checks"
 [ -f "$WORK/checks/checks/$CHECK/run.sh" ] || publish false 1 "no check named $CHECK"
 
-clone_repo() { # <repo> <dir>
-  auth git clone -q --filter=blob:none --no-checkout "https://github.com/4BornGithub/$1.git" "$2" &&
-    git -C "$2" checkout -q "$REF" 2>/dev/null || git -C "$2" checkout -q "origin/$REF"
+clone_repo() { # <repo> <dir>: a branch or tag is cloned shallow; anything else (a sha) needs the full history
+  auth git clone -q --depth 1 --branch "$REF" "https://github.com/4BornGithub/$1.git" "$2" && return 0
+  rm -rf "$2"
+  auth git clone -q --no-checkout "https://github.com/4BornGithub/$1.git" "$2" && git -C "$2" checkout -q "$REF"
 }
 { clone_repo Assumer "$WORK/assumer"; } >>"$SETUP_LOG" 2>&1 || publish false 1 "cannot check out Assumer at $REF"
 SHA=$(git -C "$WORK/assumer" rev-parse HEAD)
 SERVER_DIR=""
 if grep -qx 'Assumer-Server' "$WORK/checks/checks/$CHECK/needs" 2>/dev/null; then
-  { clone_repo Assumer-Server "$WORK/server" || { git -C "$WORK/server" checkout -q origin/HEAD; }; } >>"$SETUP_LOG" 2>&1 \
+  { clone_repo Assumer-Server "$WORK/server" || { rm -rf "$WORK/server"; auth git clone -q --depth 1 https://github.com/4BornGithub/Assumer-Server.git "$WORK/server"; }; } >>"$SETUP_LOG" 2>&1 \
     || publish false 1 "cannot check out Assumer-Server"
   SERVER_DIR="$WORK/server"
 fi
