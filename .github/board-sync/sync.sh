@@ -82,7 +82,7 @@ export_items() {
       page=""
       sleep $((attempt * 5))
     done
-    [ -n "$page" ] || return 1
+    [ -n "$page" ] || { echo "a page failed 4 times" > "$WORK/why"; return 1; }
     # A card whose content the token cannot read comes back with a partial error; the count check below still
     # guarantees nothing was skipped. The error's type is kept for the status line (no private text).
     jq -r '.errors[]? | .type // "error"' <<<"$page" >> "$WORK/partial-errors"
@@ -95,14 +95,14 @@ export_items() {
     [ "$(jq -r '.data.user.projectV2.items.pageInfo.hasNextPage' <<<"$page")" = true ] || break
     after=$(jq -r '.data.user.projectV2.items.pageInfo.endCursor' <<<"$page")
   done
-  [ "$(wc -l < "$WORK/items.ndjson")" -eq "$total" ] || return 1
+  [ "$(wc -l < "$WORK/items.ndjson")" -eq "$total" ] || { echo "read $(wc -l < "$WORK/items.ndjson") of $total" > "$WORK/why"; return 1; }
   jq -s 'sort_by(.status, -(.number // 0))' "$WORK/items.ndjson" > "$OUT/board.json"
 }
 
 export_items || {
   # Say why, without printing anything private: the GraphQL rate limit is the usual cause on busy days.
   RATE=$(gh api graphql -f query='query { rateLimit { remaining resetAt } }' --jq '"\(.data.rateLimit.remaining) points left, resets \(.data.rateLimit.resetAt)"' 2>/dev/null || echo "rate limit unknown")
-  finish false "could not read the whole board (GitHub errors or a short read; $RATE); the previous snapshot is kept"
+  finish false "could not read the whole board ($(cat "$WORK/why" 2>/dev/null || echo unknown); $RATE); the previous snapshot is kept"
 }
 
 # Apply new move requests.
