@@ -96,7 +96,11 @@ export_items() {
   jq -s 'sort_by(.status, -(.number // 0))' "$WORK/items.ndjson" > "$OUT/board.json"
 }
 
-export_items || finish false "could not read the whole board (GitHub errors or a short read); the previous snapshot is kept"
+export_items || {
+  # Say why, without printing anything private: the GraphQL rate limit is the usual cause on busy days.
+  RATE=$(gh api graphql -f query='query { rateLimit { remaining resetAt } }' --jq '"\(.data.rateLimit.remaining) points left, resets \(.data.rateLimit.resetAt)"' 2>/dev/null || echo "rate limit unknown")
+  finish false "could not read the whole board (GitHub errors or a short read; $RATE); the previous snapshot is kept"
+}
 
 # Apply new move requests.
 if git clone -q --depth 1 --branch board-requests "$REMOTE" "$WORK/req" 2>/dev/null; then
