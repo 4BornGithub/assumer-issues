@@ -78,11 +78,14 @@ export_items() {
               }
             }
           } } }
-        }') && jq -e '(.errors | not) and (.data.user.projectV2.items.nodes | type == "array")' <<<"$page" > /dev/null && break
+        }') && jq -e '.data.user.projectV2.items.nodes | type == "array"' <<<"$page" > /dev/null && break
       page=""
       sleep $((attempt * 5))
     done
     [ -n "$page" ] || return 1
+    # A card whose content the token cannot read comes back with a partial error; the count check below still
+    # guarantees nothing was skipped. The error's type is kept for the status line (no private text).
+    jq -r '.errors[]? | .type // "error"' <<<"$page" >> "$WORK/partial-errors"
     total=$(jq -r '.data.user.projectV2.items.totalCount' <<<"$page")
     jq -c '.data.user.projectV2.items.nodes[] | {
         item_id: .id, status: (.status.name // "No status"), type: .content.__typename, number: .content.number,
@@ -147,4 +150,4 @@ fi
   jq -r 'group_by(.status)[] | "\n## \(.[0].status) (\(length))\n", (.[] | "- #\(.number // "-") \(.title)\(if (.assignees|length)>0 then " (" + (.assignees|join(", ")) + ")" else "" end)")' "$OUT/board.json"
 } > "$OUT/board.md"
 
-finish true "read $(jq length "$OUT/board.json") cards"
+finish true "read $(jq length "$OUT/board.json") cards$( [ -s "$WORK/partial-errors" ] && echo "; partial errors: $(sort "$WORK/partial-errors" | uniq -c | tr -s ' ' | tr '\n' ',')" )"
