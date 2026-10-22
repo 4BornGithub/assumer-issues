@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Generic runner for the OS check workflow. Everything it reads or writes is private (4BornGithub/assumer-releases):
-#   branch os-checks   checks/<CHECK>/run.sh (+ optional checks/<CHECK>/needs listing extra repos, e.g. Assumer-Server)
+#   branch os-checks   checks/<CHECK>/run.sh (+ optional checks/<CHECK>/needs: Assumer-Server, bun-install)
 #   branch os-results  results/<REQUEST_ID>/<OS_LABEL>/{status.json, log.txt, setup.txt, ...}   (written here)
 # The code under test is cloned at REF into runner temp space. Nothing is printed; the token never reaches the check.
 set -uo pipefail
@@ -66,6 +66,14 @@ if grep -qx 'Assumer-Server' "$WORK/checks/checks/$CHECK/needs" 2>/dev/null; the
   { clone_repo Assumer-Server "$WORK/server" || { rm -rf "$WORK/server"; auth git clone -q --depth 1 https://github.com/4BornGithub/Assumer-Server.git "$WORK/server"; }; } >>"$SETUP_LOG" 2>&1 \
     || publish false 1 "cannot check out Assumer-Server"
   SERVER_DIR="$WORK/server"
+fi
+
+# `bun-install` in needs: install Assumer's dependencies here, because one of them (ghostty-web) is a private
+# GitHub package that bun downloads with GITHUB_TOKEN. Output goes to install.txt; the check then skips its install.
+if grep -qx 'bun-install' "$WORK/checks/checks/$CHECK/needs" 2>/dev/null; then
+  ( cd "$WORK/assumer" && GITHUB_TOKEN="$GH_TOKEN" bun install --frozen-lockfile ) > "$RES/install.txt" 2>&1 \
+    || publish false 1 "bun install failed (see install.txt)"
+  touch "$WORK/.installed"
 fi
 
 # The check runs without the token: AUTH is not exported and GH_TOKEN is removed from its environment.
