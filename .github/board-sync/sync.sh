@@ -102,10 +102,13 @@ export_items() {
 }
 
 read_board() { local n; for n in 1 2 3; do export_items && return 0; sleep $((n * 10)); done; return 1; }
+# A failed read keeps the previous snapshot, but moves still go through: a card not found in the snapshot is
+# looked up with addProjectV2ItemById, which returns the existing item.
+READ_FAILED=""
 read_board || {
   # Say why, without printing anything private: the GraphQL rate limit is the usual cause on busy days.
   RATE=$(gh api graphql -f query='query { rateLimit { remaining resetAt } }' --jq '"\(.data.rateLimit.remaining) points left, resets \(.data.rateLimit.resetAt)"' 2>/dev/null || echo "rate limit unknown")
-  finish false "could not read the whole board ($(cat "$WORK/why" 2>/dev/null || echo unknown); $RATE); the previous snapshot is kept"
+  READ_FAILED="could not read the whole board ($(cat "$WORK/why" 2>/dev/null || echo unknown); $RATE); the previous snapshot is kept"
 }
 
 # Apply new move requests.
@@ -139,7 +142,7 @@ if git clone -q --depth 1 --branch board-requests "$REMOTE" "$WORK/req" 2>/dev/n
       result false "GitHub refused the move"
     fi
   done
-  [ "$moved" -gt 0 ] && { read_board || finish false "moved cards but could not re-read the board"; }
+  [ "$moved" -gt 0 ] && [ -z "$READ_FAILED" ] && { read_board || finish false "moved cards but could not re-read the board"; }
 fi
 
 {
@@ -153,4 +156,5 @@ fi
   jq -r 'group_by(.status)[] | "\n## \(.[0].status) (\(length))\n", (.[] | "- #\(.number // "-") \(.title)\(if (.assignees|length)>0 then " (" + (.assignees|join(", ")) + ")" else "" end)")' "$OUT/board.json"
 } > "$OUT/board.md"
 
+[ -n "$READ_FAILED" ] && finish false "$READ_FAILED"
 finish true "read $(jq length "$OUT/board.json") cards$( [ -s "$WORK/partial-errors" ] && echo "; partial errors: $(sort "$WORK/partial-errors" | uniq -c | tr -s ' ' | tr '\n' ',')" )"
