@@ -1,0 +1,253 @@
+name: Release
+
+# Builds an Assumer release on GitHub-hosted runners. This repo is public, so it holds only this workflow and the
+# generic steps in .github/release/: the source is cloned at run time from the PRIVATE repo 4BornGithub/Assumer into
+# runner temp space, release files go to the GitHub release of the PRIVATE repo 4BornGithub/assumer-releases, and full
+# logs go to its branch os-results (results/release-<version>-<run id>/<job>/). Logs here print only step names and
+# ok/failed; nothing is uploaded as an artifact. Only accounts with write access can start it; no issue, comment or
+# pull request can.
+#   stage build        CLI (12 targets) + smoke tests on Linux/Windows/macOS + Windows desktop app, into the DRAFT v<version>
+#   stage npm-dry-run  npm publish --dry-run of the release's own binaries (no token needed)
+#   stage npm-publish  the real npm publish; needs the NPM_TOKEN secret and confirm = publish-<version>
+#   repository_dispatch  event_type release, client_payload {stage, version, ref, only, confirm}
+on:
+  repository_dispatch:
+    types: [release]
+  workflow_dispatch:
+    inputs:
+      stage: { description: "build | npm-dry-run | npm-publish", required: true, default: "build" }
+      version: { description: "release version, e.g. 1.1.10", required: true }
+      ref: { description: "Assumer git ref (branch, tag or sha)", required: true }
+      only: { description: "build stage: space-separated subset of 'cli desktop'", required: false, default: "cli desktop" }
+      confirm: { description: "npm-publish only: type publish-<version>", required: false, default: "" }
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      stage: ${{ steps.plan.outputs.stage }}
+      version: ${{ steps.plan.outputs.version }}
+      ref: ${{ steps.plan.outputs.ref }}
+      cli: ${{ steps.plan.outputs.cli }}
+      desktop: ${{ steps.plan.outputs.desktop }}
+      run_key: ${{ steps.plan.outputs.run_key }}
+    steps:
+      - name: Validate request
+        id: plan
+        env:
+          IN_STAGE: ${{ github.event.client_payload.stage || inputs.stage }}
+          IN_VERSION: ${{ github.event.client_payload.version || inputs.version }}
+          IN_REF: ${{ github.event.client_payload.ref || inputs.ref }}
+          IN_ONLY: ${{ github.event.client_payload.only || inputs.only || 'cli desktop' }}
+        run: |
+          set -u
+          fail() { echo failed; exit 1; }
+          [[ "$IN_STAGE" =~ ^(build|npm-dry-run|npm-publish)$ ]] || fail
+          [[ "$IN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail
+          [[ "$IN_REF" =~ ^[A-Za-z0-9._/-]+$ && "$IN_REF" != *..* ]] || fail
+          cli=false; desktop=false
+          for o in $IN_ONLY; do case $o in cli) cli=true ;; desktop) desktop=true ;; *) fail ;; esac; done
+          {
+            echo "stage=$IN_STAGE"; echo "version=$IN_VERSION"; echo "ref=$IN_REF"
+            echo "cli=$cli"; echo "desktop=$desktop"; echo "run_key=release-$IN_VERSION-$GITHUB_RUN_ID"
+          } >> "$GITHUB_OUTPUT"
+          echo ok
+      - uses: actions/checkout@v5
+        with: { persist-credentials: false, sparse-checkout: .github/release }
+      - name: Check PROJECT_TOKEN can write releases of the private repo
+        env: { GH_TOKEN: "${{ secrets.PROJECT_TOKEN }}", VERSION: "${{ steps.plan.outputs.version }}" }
+        run: bash .github/release/step.sh token .github/release/preflight.sh token
+      - name: Check the release exists (a draft, for the build stage)
+        env: { GH_TOKEN: "${{ secrets.PROJECT_TOKEN }}", VERSION: "${{ steps.plan.outputs.version }}" }
+        run: |
+          if [ "${{ steps.plan.outputs.stage }}" = build ]; then w=release-draft; else w=release-any; fi
+          bash .github/release/step.sh release .github/release/preflight.sh $w
+      - name: Save logs
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+          RUN_KEY: ${{ steps.plan.outputs.run_key }}
+          VERSION: ${{ steps.plan.outputs.version }}
+          REF: ${{ steps.plan.outputs.ref }}
+          JOB_STATUS: ${{ job.status }}
+        run: if bash .github/release/save.sh plan > /dev/null 2>&1; then echo ok; else echo failed; fi
+
+  cli:
+    needs: plan
+    if: needs.plan.outputs.stage == 'build' && needs.plan.outputs.cli == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      REF: ${{ needs.plan.outputs.ref }}
+      RUN_KEY: ${{ needs.plan.outputs.run_key }}
+    steps:
+      - uses: actions/checkout@v5
+        with: { persist-credentials: false, sparse-checkout: .github/release }
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: 1.3.14 }
+      - uses: actions/setup-node@v5
+        with: { node-version: 22 }
+      - name: Clone Assumer
+        run: bash .github/release/step.sh cli-clone .github/release/cli.sh clone
+      - name: Install dependencies
+        run: bash .github/release/step.sh cli-install .github/release/cli.sh install
+      - name: Build 12 targets and upload archives
+        timeout-minutes: 90
+        run: bash .github/release/step.sh cli-build .github/release/cli.sh build
+      - name: Verify build.json, Linux --version, archives and uploads
+        run: bash .github/release/step.sh cli-verify .github/release/cli.sh verify
+      - name: Save logs
+        if: always()
+        env: { JOB_STATUS: "${{ job.status }}" }
+        run: if bash .github/release/save.sh cli > /dev/null 2>&1; then echo ok; else echo failed; fi
+
+  smoke:
+    needs: [plan, cli]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, targets: "linux-x64 linux-x64-baseline linux-x64-musl linux-x64-baseline-musl" }
+          - { os: ubuntu-24.04-arm, targets: "linux-arm64 linux-arm64-musl" }
+          - { os: windows-latest, targets: "windows-x64 windows-x64-baseline" }
+          - { os: windows-11-arm, targets: "windows-arm64" }
+          - { os: macos-latest, targets: "darwin-arm64" }
+          - { os: macos-15-intel, targets: "darwin-x64 darwin-x64-baseline" }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      REF: ${{ needs.plan.outputs.ref }}
+      RUN_KEY: ${{ needs.plan.outputs.run_key }}
+    steps:
+      - uses: actions/checkout@v5
+        with: { persist-credentials: false, sparse-checkout: .github/release }
+      - name: Download archives and run --version
+        shell: bash
+        run: bash .github/release/step.sh smoke .github/release/smoke.sh ${{ matrix.targets }}
+      - name: Save logs
+        if: always()
+        shell: bash
+        env: { JOB_STATUS: "${{ job.status }}" }
+        run: if bash .github/release/save.sh smoke-${{ matrix.os }} > /dev/null 2>&1; then echo ok; else echo failed; fi
+
+  desktop:
+    needs: plan
+    if: needs.plan.outputs.stage == 'build' && needs.plan.outputs.desktop == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 150
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      REF: ${{ needs.plan.outputs.ref }}
+      RUN_KEY: ${{ needs.plan.outputs.run_key }}
+    steps:
+      - uses: actions/checkout@v5
+        with: { persist-credentials: false, sparse-checkout: .github/release }
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: 1.3.14 }
+      - uses: actions/setup-node@v5
+        with: { node-version: 22 }
+      - name: Clone Assumer
+        run: bash .github/release/step.sh desktop-clone .github/release/desktop.sh clone
+      - name: Install dependencies
+        run: bash .github/release/step.sh desktop-install .github/release/desktop.sh install
+      - name: Build (ASSUMER_CHANNEL=prod)
+        run: bash .github/release/step.sh desktop-build .github/release/desktop.sh build
+      - name: Package for Windows
+        run: bash .github/release/step.sh desktop-package .github/release/desktop.sh package
+      - name: Check fuses, app-update.yml and latest.yml
+        run: bash .github/release/step.sh desktop-check .github/release/desktop.sh check
+      - name: Upload installer, blockmap and latest.yml
+        run: bash .github/release/step.sh desktop-upload .github/release/desktop.sh upload
+      - name: Install and start the app
+        run: bash .github/release/step.sh desktop-start .github/release/desktop.sh start
+      - name: Save logs
+        if: always()
+        env: { JOB_STATUS: "${{ job.status }}" }
+        run: if bash .github/release/save.sh desktop > /dev/null 2>&1; then echo ok; else echo failed; fi
+
+  npm-dry-run:
+    needs: plan
+    if: needs.plan.outputs.stage == 'npm-dry-run'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      REF: ${{ needs.plan.outputs.ref }}
+      RUN_KEY: ${{ needs.plan.outputs.run_key }}
+    steps:
+      - uses: actions/checkout@v5
+        with: { persist-credentials: false, sparse-checkout: .github/release }
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: 1.3.14 }
+      - uses: actions/setup-node@v5
+        with: { node-version: 22 }
+      - name: Clone Assumer
+        run: bash .github/release/step.sh npm-clone .github/release/npm.sh clone
+      - name: Install dependencies
+        run: bash .github/release/step.sh npm-install .github/release/npm.sh install
+      - name: Rebuild dist from the release archives
+        run: bash .github/release/step.sh npm-fetch .github/release/npm.sh fetch
+      - name: npm publish --dry-run (14 packages)
+        run: bash .github/release/step.sh npm-dry-run .github/release/npm.sh dry-run
+      - name: Save logs
+        if: always()
+        env: { JOB_STATUS: "${{ job.status }}" }
+        run: if bash .github/release/save.sh npm-dry-run > /dev/null 2>&1; then echo ok; else echo failed; fi
+
+  npm-publish:
+    needs: plan
+    if: needs.plan.outputs.stage == 'npm-publish'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency: { group: npm-publish, cancel-in-progress: false }
+    env:
+      GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      REF: ${{ needs.plan.outputs.ref }}
+      RUN_KEY: ${{ needs.plan.outputs.run_key }}
+    steps:
+      - name: Check NPM_TOKEN
+        env: { NPM_TOKEN: "${{ secrets.NPM_TOKEN }}" }
+        run: if [ -n "$NPM_TOKEN" ]; then echo ok; else echo "NPM_TOKEN not set"; exit 1; fi
+      - name: Check confirmation
+        env: { CONFIRM: "${{ github.event.client_payload.confirm || inputs.confirm }}" }
+        run: if [ "$CONFIRM" = "publish-$VERSION" ]; then echo ok; else echo "confirm must be publish-$VERSION"; exit 1; fi
+      - uses: actions/checkout@v5
+        with: { persist-credentials: false, sparse-checkout: .github/release }
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: 1.3.14 }
+      - uses: actions/setup-node@v5
+        with: { node-version: 22 }
+      - name: Clone Assumer
+        run: bash .github/release/step.sh npm-clone .github/release/npm.sh clone
+      - name: Install dependencies
+        run: bash .github/release/step.sh npm-install .github/release/npm.sh install
+      - name: Rebuild dist from the release archives
+        run: bash .github/release/step.sh npm-fetch .github/release/npm.sh fetch
+      - name: npm publish --dry-run (14 packages)
+        run: bash .github/release/step.sh npm-dry-run .github/release/npm.sh dry-run
+      - name: npm whoami
+        env: { NPM_TOKEN: "${{ secrets.NPM_TOKEN }}" }
+        run: bash .github/release/step.sh npm-login .github/release/npm.sh login
+      - name: Publish 12 platform packages, assumer-ai (latest) and @4born-solutions/assumer (dev)
+        env: { NPM_TOKEN: "${{ secrets.NPM_TOKEN }}" }
+        run: bash .github/release/step.sh npm-publish .github/release/npm.sh publish
+      - name: Verify dist-tags on the registry
+        run: bash .github/release/step.sh npm-verify .github/release/npm.sh verify
+      - name: Save logs
+        if: always()
+        env: { JOB_STATUS: "${{ job.status }}" }
+        run: if [ -f .github/release/save.sh ] && bash .github/release/save.sh npm-publish > /dev/null 2>&1; then echo ok; else echo failed; fi
