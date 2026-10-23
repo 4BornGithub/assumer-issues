@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # npm.sh <clone|install|fetch|dry-run|login|publish|verify>: publishes to npm exactly the binaries release v$VERSION
-# carries (release-checklist.md section 4), with packages/assumer/script/dist-from-release.ts and publish.ts.
+# carries (release-checklist.md section 4), with packages/assumer/script/unpack-release.ts and publish.ts.
 source "$(dirname "$0")/lib.sh"
 P="$A/packages/assumer"
 NAMES="linux-arm64 linux-x64 linux-x64-baseline linux-arm64-musl linux-x64-musl linux-x64-baseline-musl darwin-arm64 darwin-x64 darwin-x64-baseline windows-arm64 windows-x64 windows-x64-baseline"
@@ -10,7 +10,7 @@ case "$1" in
   clone)
     clone Assumer "$REF" "$A" || exit 1
     git -C "$A" log -1 --format='%H %s'
-    [ -f "$P/script/dist-from-release.ts" ] && grep -q -- '--dry-run' "$P/script/publish.ts" || { echo "ref lacks the dry-run publish"; exit 1; }
+    [ -f "$P/script/unpack-release.ts" ] && grep -q -- '--dry-run' "$P/script/publish.ts" || { echo "ref lacks the dry-run publish"; exit 1; }
     ;;
   install)
     cd "$A" && GITHUB_TOKEN="$GH_TOKEN" bun install --frozen-lockfile --ignore-scripts
@@ -24,7 +24,7 @@ case "$1" in
       files+=("$WORK/archives/$f")
     done
     check_uploaded "${files[@]}" || exit 1
-    cd "$P" && ASSUMER_VERSION="$VERSION" bun run script/dist-from-release.ts "$WORK/archives" || exit 1
+    cd "$P" && ASSUMER_VERSION="$VERSION" bun run script/unpack-release.ts "$WORK/archives" || exit 1
     out=$(dist/assumer-linux-x64/bin/assumer --version); echo "linux-x64 --version: $out"; [ "$out" = "$VERSION" ]
     ;;
   dry-run)
