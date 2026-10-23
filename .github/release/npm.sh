@@ -29,7 +29,7 @@ case "$1" in
     ;;
   dry-run)
     cd "$P" && env -u NPM_TOKEN -u NODE_AUTH_TOKEN ASSUMER_VERSION="$VERSION" bun run script/publish.ts --dry-run || exit 1
-    for w in assumer-ai 4born-solutions-assumer; do
+    for w in assumer-ai @4born-solutions-assumer; do
       jq '{name, version, optionalDependencies}' "dist/wrapper-$w/package.json"
       jq -e --arg v "$VERSION" '.version == $v and (.optionalDependencies | length == 12 and all(.[]; . == $v))' "dist/wrapper-$w/package.json" > /dev/null || exit 1
     done
