@@ -15,11 +15,12 @@ mkdir -p "$WORK" "$LOGS"
 AUTH="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN:-}" | base64 | tr -d '\n\r')"
 auth() { GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader GIT_CONFIG_VALUE_0="$AUTH" "$@"; }
 
-# clone <repo> <ref> <dir>: a branch or tag is cloned shallow; a sha needs the history.
+# clone <repo> <ref> <dir>: a branch or tag is cloned shallow; a full sha is fetched alone (shallow).
 clone() {
   auth git clone -q --depth 1 --branch "$2" "https://github.com/4BornGithub/$1.git" "$3" && return 0
   rm -rf "$3"
-  auth git clone -q --filter=blob:none --no-checkout "https://github.com/4BornGithub/$1.git" "$3" && git -C "$3" checkout -q "$2"
+  git init -q "$3" && auth git -C "$3" fetch -q --depth 1 "https://github.com/4BornGithub/$1.git" "$2" &&
+    git -C "$3" checkout -q --detach FETCH_HEAD && [ "$(git -C "$3" rev-parse HEAD)" = "$2" ]
 }
 
 # The release v$VERSION (drafts included) as JSON.
