@@ -39,6 +39,28 @@ case "$1" in
     printf '//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n' > "$WORK/npmrc"
     NPM_CONFIG_USERCONFIG="$WORK/npmrc" npm whoami
     ;;
+  token-facts)
+    # Read-only facts about NPM_TOKEN; the token itself is never printed.
+    [ -n "${NPM_TOKEN:-}" ] || { echo "NPM_TOKEN not set"; exit 1; }
+    export NPM_CONFIG_USERCONFIG="$WORK/npmrc"
+    user=$(npm whoami) || { echo "whoami failed"; exit 1; }
+    echo "npm user: $user"
+    echo "== profile (2FA)"; npm profile get --json 2>&1 | jq -c '{name, tfa, email_verified}' || true
+    echo "== access"
+    npm access list packages "$user" --json > "$WORK/access.json" 2>&1 || true
+    cat "$WORK/access.json"
+    bad=0
+    for p in assumer-ai @4born-solutions/assumer $(for t in $NAMES; do echo "assumer-$t"; done); do
+      acc=$(jq -r --arg p "$p" '.[$p] // "none"' "$WORK/access.json" 2>/dev/null)
+      maint=$(npm view "$p" maintainers --json 2>/dev/null | jq -r --arg u "$user" 'if type=="array" then (map(if type=="string" then . else .name end) | map(split(" ")[0]) | index($u) != null) else false end')
+      echo "$p access=$acc maintainer=$maint"
+      [ "$acc" = read-write ] || [ "$maint" = true ] || bad=1
+    done
+    [ $bad = 0 ]
+    ;;
+  dry-run-token)
+    cd "$P" && NPM_CONFIG_USERCONFIG="$WORK/npmrc" ASSUMER_VERSION="$VERSION" bun run script/publish.ts --dry-run
+    ;;
   publish)
     cd "$P" && NPM_CONFIG_USERCONFIG="$WORK/npmrc" ASSUMER_VERSION="$VERSION" bun run script/publish.ts
     ;;
