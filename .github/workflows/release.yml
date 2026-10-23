@@ -11,17 +11,18 @@ name: Release
 #   stage npm-dry-run  npm publish --dry-run of the release's own binaries (no token needed)
 #   stage npm-check    read-only NPM_TOKEN check (whoami, 2FA mode, package access) and a dry run with the token
 #   stage npm-publish  the real npm publish; needs the NPM_TOKEN secret and confirm = publish-<version>
+#   stage publish      publishes the DRAFT v<version> and marks it latest, after checking its 15 files; needs confirm = release-<version>
 #   repository_dispatch  event_type release, client_payload {stage, version, ref, only, confirm}
 on:
   repository_dispatch:
     types: [release]
   workflow_dispatch:
     inputs:
-      stage: { description: "draft | build | npm-dry-run | npm-check | npm-publish", required: true, default: "build" }
+      stage: { description: "draft | build | npm-dry-run | npm-check | npm-publish | publish", required: true, default: "build" }
       version: { description: "release version, e.g. 1.1.10", required: true }
       ref: { description: "Assumer git ref (branch, tag or sha)", required: true }
       only: { description: "build stage: space-separated subset of 'cli desktop'", required: false, default: "cli desktop" }
-      confirm: { description: "npm-publish only: type publish-<version>", required: false, default: "" }
+      confirm: { description: "npm-publish: type publish-<version>; publish: type release-<version>", required: false, default: "" }
 
 permissions:
   contents: read
@@ -48,7 +49,7 @@ jobs:
         run: |
           set -u
           fail() { echo failed; exit 1; }
-          [[ "$IN_STAGE" =~ ^(draft|build|npm-dry-run|npm-check|npm-publish)$ ]] || fail
+          [[ "$IN_STAGE" =~ ^(draft|build|npm-dry-run|npm-check|npm-publish|publish)$ ]] || fail
           [[ "$IN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail
           [[ "$IN_REF" =~ ^[A-Za-z0-9._/-]+$ && "$IN_REF" != *..* ]] || fail
           cli=false; desktop=false
@@ -67,7 +68,17 @@ jobs:
         if: steps.plan.outputs.stage == 'draft'
         env: { GH_TOKEN: "${{ secrets.PROJECT_TOKEN }}", VERSION: "${{ steps.plan.outputs.version }}" }
         run: bash .github/release/step.sh draft .github/release/preflight.sh draft
+      - name: Publish the draft and mark it latest
+        if: steps.plan.outputs.stage == 'publish'
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+          VERSION: ${{ steps.plan.outputs.version }}
+          CONFIRM: ${{ github.event.client_payload.confirm || inputs.confirm }}
+        run: |
+          [ "$CONFIRM" = "release-$VERSION" ] || { echo failed; exit 1; }
+          bash .github/release/step.sh publish .github/release/preflight.sh publish
       - name: Check the release exists (a draft, for the build stage)
+        if: steps.plan.outputs.stage != 'publish'
         env: { GH_TOKEN: "${{ secrets.PROJECT_TOKEN }}", VERSION: "${{ steps.plan.outputs.version }}" }
         run: |
           if [[ "${{ steps.plan.outputs.stage }}" == npm-* ]]; then w=release-any; else w=release-draft; fi

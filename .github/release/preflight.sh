@@ -42,5 +42,19 @@ case "$1" in
     fi
     [ "$(release_json | jq -r .tag_name)" = "v$VERSION" ] || { echo "draft is not tagged v$VERSION"; exit 1; }
     ;;
+  publish)
+    # Publishes the draft v$VERSION and marks it latest, only when it holds every file a release needs: the 12 CLI
+    # archives and the desktop installer, its blockmap and latest.yml. A published release is left as it is.
+    json=$(release_json); [ -n "$json" ] && [ "$json" != null ] || { echo "no release v$VERSION"; exit 1; }
+    [ "$(jq -r .draft <<<"$json")" = true ] || { echo "v$VERSION is already published"; exit 0; }
+    want="assumer-darwin-arm64.zip assumer-darwin-x64-baseline.zip assumer-darwin-x64.zip assumer-linux-arm64-musl.tar.gz
+      assumer-linux-arm64.tar.gz assumer-linux-x64-baseline-musl.tar.gz assumer-linux-x64-baseline.tar.gz
+      assumer-linux-x64-musl.tar.gz assumer-linux-x64.tar.gz assumer-windows-arm64.zip assumer-windows-x64-baseline.zip
+      assumer-windows-x64.zip assumer-desktop-win-x64.exe assumer-desktop-win-x64.exe.blockmap latest.yml"
+    for f in $want; do jq -e --arg f "$f" '[.assets[].name] | index($f)' <<<"$json" > /dev/null || { echo "missing $f"; exit 1; }; done
+    gh api -X PATCH "repos/$PRIVATE/releases/$(jq -r .id <<<"$json")" -f tag_name="v$VERSION" -F draft=false \
+      -f make_latest=true --jq '{tag_name, draft, published_at}' || exit 1
+    [ "$(gh api "repos/$PRIVATE/releases/latest" --jq .tag_name)" = "v$VERSION" ] || { echo "v$VERSION is not latest"; exit 1; }
+    ;;
   *) exit 1 ;;
 esac
