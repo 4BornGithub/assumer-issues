@@ -28,7 +28,7 @@ release_json() {
   # The list can lag a just-created draft by a few seconds, so an empty answer is asked again.
   local json i
   for i in 1 2 3 4 5 6; do
-    json=$(gh api "repos/$PRIVATE/releases?per_page=100" --jq "[.[] | select(.tag_name == \"v$VERSION\")] | first")
+    json=$(gh api "repos/$PRIVATE/releases?per_page=100" --jq "[.[] | select(.tag_name == \"v$VERSION\" or (.draft and .name == \"Assumer $VERSION\"))] | first")
     [ -n "$json" ] && [ "$json" != null ] && { echo "$json"; return 0; }
     [ "${RELEASE_JSON_ONCE:-}" = 1 ] && break
     sleep 5

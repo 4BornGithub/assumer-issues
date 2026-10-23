@@ -36,9 +36,11 @@ case "$1" in
         gh api -X POST "repos/$PRIVATE/releases" --input - --jq '{id, tag_name, draft, html_url}' || exit 1
     else
       [ "$(jq -r .draft <<<"$json")" = true ] || { echo "v$VERSION is already published"; exit 1; }
-      jq -n --arg name "Assumer $VERSION" --rawfile body "$notes" '{name:$name, body:$body}' |
+      # tag_name is sent every time: a PATCH of a draft without it leaves the draft untagged.
+      jq -n --arg tag "v$VERSION" --arg name "Assumer $VERSION" --rawfile body "$notes" '{tag_name:$tag, name:$name, body:$body}' |
         gh api -X PATCH "repos/$PRIVATE/releases/$(jq -r .id <<<"$json")" --input - --jq '{id, tag_name, draft, html_url}' || exit 1
     fi
+    [ "$(release_json | jq -r .tag_name)" = "v$VERSION" ] || { echo "draft is not tagged v$VERSION"; exit 1; }
     ;;
   *) exit 1 ;;
 esac
