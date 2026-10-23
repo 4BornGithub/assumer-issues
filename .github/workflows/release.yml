@@ -6,6 +6,7 @@ name: Release
 # logs go to its branch os-results (results/release-<version>-<run id>/<job>/). Logs here print only step names and
 # ok/failed; nothing is uploaded as an artifact. Only accounts with write access can start it; no issue, comment or
 # pull request can.
+#   stage draft        creates the DRAFT v<version>, or updates its notes, from release-notes/v<version>.md on os-results
 #   stage build        CLI (12 targets) + smoke tests on Linux/Windows/macOS + Windows desktop app, into the DRAFT v<version>
 #   stage npm-dry-run  npm publish --dry-run of the release's own binaries (no token needed)
 #   stage npm-publish  the real npm publish; needs the NPM_TOKEN secret and confirm = publish-<version>
@@ -15,7 +16,7 @@ on:
     types: [release]
   workflow_dispatch:
     inputs:
-      stage: { description: "build | npm-dry-run | npm-publish", required: true, default: "build" }
+      stage: { description: "draft | build | npm-dry-run | npm-publish", required: true, default: "build" }
       version: { description: "release version, e.g. 1.1.10", required: true }
       ref: { description: "Assumer git ref (branch, tag or sha)", required: true }
       only: { description: "build stage: space-separated subset of 'cli desktop'", required: false, default: "cli desktop" }
@@ -46,7 +47,7 @@ jobs:
         run: |
           set -u
           fail() { echo failed; exit 1; }
-          [[ "$IN_STAGE" =~ ^(build|npm-dry-run|npm-publish)$ ]] || fail
+          [[ "$IN_STAGE" =~ ^(draft|build|npm-dry-run|npm-publish)$ ]] || fail
           [[ "$IN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail
           [[ "$IN_REF" =~ ^[A-Za-z0-9._/-]+$ && "$IN_REF" != *..* ]] || fail
           cli=false; desktop=false
@@ -61,10 +62,14 @@ jobs:
       - name: Check PROJECT_TOKEN can write releases of the private repo
         env: { GH_TOKEN: "${{ secrets.PROJECT_TOKEN }}", VERSION: "${{ steps.plan.outputs.version }}" }
         run: bash .github/release/step.sh token .github/release/preflight.sh token
+      - name: Create or update the draft release notes
+        if: steps.plan.outputs.stage == 'draft'
+        env: { GH_TOKEN: "${{ secrets.PROJECT_TOKEN }}", VERSION: "${{ steps.plan.outputs.version }}" }
+        run: bash .github/release/step.sh draft .github/release/preflight.sh draft
       - name: Check the release exists (a draft, for the build stage)
         env: { GH_TOKEN: "${{ secrets.PROJECT_TOKEN }}", VERSION: "${{ steps.plan.outputs.version }}" }
         run: |
-          if [ "${{ steps.plan.outputs.stage }}" = build ]; then w=release-draft; else w=release-any; fi
+          if [ "${{ steps.plan.outputs.stage }}" = npm-publish ] || [ "${{ steps.plan.outputs.stage }}" = npm-dry-run ]; then w=release-any; else w=release-draft; fi
           bash .github/release/step.sh release .github/release/preflight.sh $w
       - name: Save logs
         if: always()

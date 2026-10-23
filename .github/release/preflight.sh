@@ -22,5 +22,23 @@ case "$1" in
     json=$(release_json); [ -n "$json" ] && [ "$json" != null ] || { echo "no release v$VERSION"; exit 1; }
     jq '{tag_name, draft, prerelease, assets: [.assets[].name]}' <<<"$json"
     ;;
+  draft)
+    # Creates the draft v$VERSION, or replaces its notes, from release-notes/v$VERSION.md on branch os-results of the
+    # private repo. A published release is never touched.
+    rm -rf "$WORK/notes"
+    auth git clone -q --depth 1 --branch os-results "https://github.com/$PRIVATE.git" "$WORK/notes" || exit 1
+    notes="$WORK/notes/release-notes/v$VERSION.md"
+    [ -s "$notes" ] || { echo "no release-notes/v$VERSION.md"; exit 1; }
+    json=$(release_json)
+    if [ -z "$json" ] || [ "$json" = null ]; then
+      jq -n --arg tag "v$VERSION" --arg name "Assumer $VERSION" --rawfile body "$notes" \
+        '{tag_name:$tag, name:$name, body:$body, draft:true, prerelease:false}' |
+        gh api -X POST "repos/$PRIVATE/releases" --input - --jq '{id, tag_name, draft, html_url}' || exit 1
+    else
+      [ "$(jq -r .draft <<<"$json")" = true ] || { echo "v$VERSION is already published"; exit 1; }
+      jq -n --arg name "Assumer $VERSION" --rawfile body "$notes" '{name:$name, body:$body}' |
+        gh api -X PATCH "repos/$PRIVATE/releases/$(jq -r .id <<<"$json")" --input - --jq '{id, tag_name, draft, html_url}' || exit 1
+    fi
+    ;;
   *) exit 1 ;;
 esac
