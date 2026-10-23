@@ -24,7 +24,15 @@ clone() {
 
 # The release v$VERSION (drafts included) as JSON.
 release_json() {
-  gh api "repos/$PRIVATE/releases?per_page=100" --jq "[.[] | select(.tag_name == \"v$VERSION\")] | first"
+  # The list can lag a just-created draft by a few seconds, so an empty answer is asked again.
+  local json i
+  for i in 1 2 3 4 5 6; do
+    json=$(gh api "repos/$PRIVATE/releases?per_page=100" --jq "[.[] | select(.tag_name == \"v$VERSION\")] | first")
+    [ -n "$json" ] && [ "$json" != null ] && { echo "$json"; return 0; }
+    [ "${RELEASE_JSON_ONCE:-}" = 1 ] && break
+    sleep 5
+  done
+  echo null
 }
 
 # asset <name> <file>: download one asset of v$VERSION through the API, which also serves drafts.

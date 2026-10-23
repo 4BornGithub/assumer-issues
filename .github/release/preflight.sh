@@ -29,7 +29,7 @@ case "$1" in
     auth git clone -q --depth 1 --branch os-results "https://github.com/$PRIVATE.git" "$WORK/notes" || exit 1
     notes="$WORK/notes/release-notes/v$VERSION.md"
     [ -s "$notes" ] || { echo "no release-notes/v$VERSION.md"; exit 1; }
-    json=$(release_json)
+    json=$(RELEASE_JSON_ONCE=1 release_json)
     if [ -z "$json" ] || [ "$json" = null ]; then
       jq -n --arg tag "v$VERSION" --arg name "Assumer $VERSION" --rawfile body "$notes" \
         '{tag_name:$tag, name:$name, body:$body, draft:true, prerelease:false}' |
