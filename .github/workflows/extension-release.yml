@@ -1,0 +1,65 @@
+name: Extension release
+
+# Builds the Meeting Recorder Chrome extension from the PRIVATE repo 4BornGithub/Assumer-Extensions at a given ref and
+# publishes the zip as its own GitHub release (tag meeting-recorder-v<version>) on the PRIVATE repo
+# 4BornGithub/assumer-releases, for QA to install with "Load unpacked". It never becomes the "latest" release, so the CLI
+# install script and the desktop updater keep reading the CLI release. The release notes are
+# release-notes/meeting-recorder-v<version>.md on that repo's os-results branch. This repo is public: the log prints only
+# step names and ok/failed. Only accounts with write access can start it.
+#   repository_dispatch  event_type extension-release, client_payload {version, ref, confirm: "extension-<version>"}
+on:
+  repository_dispatch:
+    types: [extension-release]
+  workflow_dispatch:
+    inputs:
+      version: { description: "extension version, e.g. 1.5.5", required: true }
+      ref: { description: "Assumer-Extensions git ref (branch, tag or sha)", required: true }
+      confirm: { description: "type extension-<version>", required: true }
+
+permissions:
+  contents: read
+
+jobs:
+  extension:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+      VERSION: ${{ github.event.client_payload.version || inputs.version }}
+      REF: ${{ github.event.client_payload.ref || inputs.ref }}
+      CONFIRM: ${{ github.event.client_payload.confirm || inputs.confirm }}
+    steps:
+      - name: Validate request
+        run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$REF" =~ ^[A-Za-z0-9._/-]+$ && "$REF" != *..* && "$CONFIRM" == "extension-$VERSION" ]] && echo ok || { echo failed; exit 1; }
+      - uses: actions/setup-node@v5
+        with: { node-version: 22 }
+      - name: Clone and build the extension
+        run: |
+          set -o pipefail
+          {
+            cd "$RUNNER_TEMP"
+            git clone -q --filter=blob:none "https://x-access-token:${GH_TOKEN}@github.com/4BornGithub/Assumer-Extensions.git" ext
+            cd ext && git checkout -q "$REF"
+            [ "$(node -p "require('./manifest.json').version")" = "$VERSION" ]
+            npm ci --no-audit --no-fund
+            npx vitest run
+            npm run build
+            [ "$(node -p "require('./dist/manifest.json').version")" = "$VERSION" ]
+            (cd dist && zip -qr "$RUNNER_TEMP/assumer-meeting-recorder-v$VERSION.zip" .)
+          } > "$RUNNER_TEMP/build.log" 2>&1 && echo ok || { echo failed; exit 1; }
+      - name: Publish the release on assumer-releases
+        run: |
+          {
+            cd "$RUNNER_TEMP"
+            gh api "repos/4BornGithub/assumer-releases/contents/release-notes/meeting-recorder-v$VERSION.md?ref=os-results" --jq .content | base64 -d > notes.md
+            [ -s notes.md ]
+            cp notes.md "MEETING-RECORDER-$VERSION-QA.md"
+            TAG="meeting-recorder-v$VERSION"
+            if gh release view "$TAG" --repo 4BornGithub/assumer-releases > /dev/null 2>&1; then
+              gh release upload "$TAG" "assumer-meeting-recorder-v$VERSION.zip" "MEETING-RECORDER-$VERSION-QA.md" --repo 4BornGithub/assumer-releases --clobber
+            else
+              gh release create "$TAG" "assumer-meeting-recorder-v$VERSION.zip" "MEETING-RECORDER-$VERSION-QA.md" --repo 4BornGithub/assumer-releases \
+                --title "Meeting Recorder $VERSION (QA build)" --notes-file notes.md --latest=false
+            fi
+          } > "$RUNNER_TEMP/publish.log" 2>&1 && echo ok || { echo failed; exit 1; }
